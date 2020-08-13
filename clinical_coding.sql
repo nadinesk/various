@@ -29,8 +29,9 @@ drop table #const_pysch_exams_only
 drop table #const_pysch_gu_exams
 drop table #ach, #achw
 drop table #a2
-drop table #dxEnc
+drop table #dxEnc,#dxEnc1
 drop table #rfvEnc
+drop table #enc_meds, #enc_medications,#one_med, #enc_meds, #multi_med,#multi_med2,#enc_provOC
 
 
 SELECT	distinct 
@@ -348,13 +349,13 @@ where New_or_Est_Pt = 'Est' and
 		EM_Code = '99212'
 
 update #a1 
-set time_code_correct = 'Y'
+set time_code_correct = 'N'
 where New_or_Est_Pt = 'Est' and 
 		RFV1 in (
 			'Emergency Contraception'
 		) and 
-		time_phrase like '%spent a total of 15%' and  GC_CT is null and RPR is null and hiv is null and 
-		(EM_Code != '99213' or EM_Code is null)
+		 GC_CT is null and RPR is null and hiv is null and 
+		(EM_Code != '99212' or EM_Code is null)
 
 /*###### Est Patient, Emergency Contraception with STI Testing #####*/
 
@@ -479,6 +480,32 @@ from #const_exams c
 join #psych_exams p on c.enc_id = p.enc_id
 join #gu_exams g on c.enc_id = g.enc_id
 
+
+alter table #a1 
+add gu_exam varchar(20), 
+	const_exam varchar(20), 
+	pysch_exam varchar(20)
+
+
+update #a1 
+set gu_exam = 'Y'
+ where enc_id in (
+ select enc_id from #gu_exams
+ )
+
+ update #a1 
+set const_exam = 'Y'
+ where enc_id in (
+ select enc_id from #const_exams
+ )
+
+  update #a1 
+set pysch_exam = 'Y'
+ where enc_id in (
+ select enc_id from #psych_exams
+ )
+
+ 
 
 /*################# Candida Vuvlo Constitutional and Psych Only, Meds, New Patient ###########################################*/
 update #a1 
@@ -1607,9 +1634,103 @@ set med_dec_correct = 'NA'
 where med_dec_correct is null
 
 
-select distinct enc_id, provider_name, location_name, MRN, DOS, RFV1 RFV, EM_COde, New_or_Est_Pt, DX_Codes, time_code_correct, med_dec_correct
-into #a2
-from #a1 
+--select distinct enc_id, provider_name, location_name, MRN, DOS, RFV1 RFV, EM_COde, New_or_Est_Pt, DX_Codes, time_code_correct, med_dec_correct
+--into #a2
+--from #a1 
+
+
+
+select distinct a.enc_id, m.medication_name
+into #enc_meds
+from #a1 a 
+join ngprod.dbo.patient_medication m on a.enc_id = m.enc_id 
+where medication_name like '%fluconazole%' or 
+		medication_name like '%Clotrimazole%' or 
+		medication_name like '%Miconazole%' or 
+		medication_name like '%Terconazole%' or 
+		medication_name like '%Metronidazole%' or 
+		medication_name like '%Cleocin%' or 
+		medication_name like '%Tinidazole%' or 
+		medication_name like '%Ciprofloxacin%' or 
+		medication_name like '%Nitrofurantoin%' or 
+		medication_name like '%Sulfamethoxazole%' or 
+		medication_name like '%Monurol%' or 
+		medication_name like '%Amoxicillin%' or 
+		medication_name like '%Ceftriazone%' or 
+		medication_name like '%Doxycycline%' or 
+		medication_name like '%Metronidazole%' 
+
+
+
+select a.enc_id, medication_name='provera/oc'
+into #enc_provOC
+from #a1 a 
+join ngprod.dbo.patient_procedure pp on a.enc_id = pp.enc_id
+where pp.service_item_id in (	'AUBRA','AUBRAEQ','Brevicon',
+							'CHATEAL','CHATEALEQ','Cyclessa','CyclessaNC','CYRED','CYREDEQ','Desogen','DesogenNC','Gildess','Levora','LEVORANC','LYZA','Mgestin','MGESTINNC','Micronor','Micronornc','Modicon',
+						'ModiconNC','NO777','NORTREL','OCELL','OCEPT','ON135','ON135NC','ON777','ON777NC','ORCYCLEN','ORCYCLENNC','OTRICYCLEN','OTRINC','RECLIPSEN','Tarina','Trilo','TRILONC','TriVylibra','Tulana','Vylibra',
+							'J1050' --Depo
+							)
+
+
+
+select *
+into #multi_med
+from #enc_meds
+where enc_id in (
+	select enc_id from (
+		select enc_id, count(distinct medication_name) countMeds
+		from #enc_meds
+		group by enc_id
+		having count(distinct medication_name) > 1
+		) a
+)
+
+
+
+SELECT enc_id,  med_names= STUFF(
+             (SELECT ', ' + medication_name
+              FROM #multi_med t1
+              WHERE t1.enc_id = t2.enc_id
+              FOR XML PATH (''))
+             , 1, 1, '') 
+into #multi_med2
+from #multi_med t2
+group by enc_id
+
+select *
+into #one_med
+from #enc_meds
+where enc_id in (
+	select enc_id from (
+		select enc_id, count(distinct medication_name) countDxCode
+		from #enc_meds
+		group by enc_id
+		having count(distinct medication_name) = 1
+		) a
+)
+
+
+select * 
+into #enc_medications
+from #multi_med2
+union 
+select * 
+from #one_med
+
+alter table #a1 
+add medsDxCodes varchar(max), 
+	ocProv varchar(100)
+
+update #a1 
+set medsDxCodes = med_names
+from #a1 a 
+join #enc_medications m on a.enc_id = m.enc_id
+
+update #a1 
+set ocProv = medication_name
+from #a1 a 
+join #enc_provOC m on a.enc_id = m.enc_id
 
 
 
@@ -1644,10 +1765,119 @@ where a.enc_id in (
 	'n93.9'	
 	)
 
---delete from #rfvEnc where em_code is null
---delete from #dxEnc where em_code is null
+alter table #dxEnc 
+add [Candida-Vulvovaginitis] varchar(1000), 
+    [Bacterial Vaginosis] varchar(1000),
+	[Acute Cystitis with Hematuria,Dysuria,Urinary Frequency] varchar(1000),
+	[Acute Cystitis wo Hematuria,Dysuria,Urinary Frequency] varchar(1000),
+	[PID] varchar(1000),
+	[Pelvic Pain] varchar(1000),
+	[Abnormal Uterine Bleeding] varchar(1000)
+	
+update #dxEnc 
+set [Candida-Vulvovaginitis] = 'Candida-Vulvovaginitis' 
+from #dxEnc a
+join #dxCodes d on a.enc_id = d.enc_id
+where dx_code = 'b37.3'
+
+update #dxEnc 
+set [Bacterial Vaginosis] = 'Bacterial Vaginosis' 
+from #dxEnc a
+join #dxCodes d on a.enc_id = d.enc_id
+where dx_code = 'n76.0'
+
+update #dxEnc 
+set [Acute Cystitis with Hematuria,Dysuria,Urinary Frequency] = 'Acute Cystitis with Hematuria,Dysuria,Urinary Frequency'
+from #dxEnc a
+where enc_id in (
+select enc_id from #ach
+)
+
+update #dxEnc 
+set [Acute Cystitis wo Hematuria,Dysuria,Urinary Frequency] = 'Acute Cystitis without Hematuria,Dysuria,Urinary Frequency'
+from #dxEnc a
+where enc_id in (
+select enc_id from #achw
+)
+
+update #dxEnc 
+set [PID] = 'PID' 
+from #dxEnc a
+join #dxCodes d on a.enc_id = d.enc_id
+where dx_code = 'n70.93'
+
+
+update #dxEnc 
+set [Pelvic Pain] = 'Pelvic Pain' 
+from #dxEnc a
+join #dxCodes d on a.enc_id = d.enc_id
+where dx_code = 'n94.89'
+
+update #dxEnc 
+set [Abnormal Uterine Bleeding] = 'Abnormal Uterine Bleeding' 
+from #dxEnc a
+join #dxCodes d on a.enc_id = d.enc_id
+where dx_code = 'n93.9'
 
 
 
-select top 10 * from #dxEnc
-select * from #rfvEnc where time_code_correct = 'na'
+drop table #dxEnc1
+select location_name, 
+		MRN, 
+		DOS, 
+		enc_id,
+		provider_name, 
+		[Candida-Vulvovaginitis], 
+		[Bacterial Vaginosis] ,
+		[Acute Cystitis with Hematuria,Dysuria,Urinary Frequency] ,
+		[Acute Cystitis wo Hematuria,Dysuria,Urinary Frequency] ,
+		[PID] ,
+		[Pelvic Pain] ,
+		[Abnormal Uterine Bleeding],
+		RFV1, 
+		EM_Code, 
+		New_or_Est_pt, 
+		DX_Codes, 
+		GC_CT, 
+		RPR, 
+		HIV, 
+		pregTestResult, 
+		time_phrase, 
+		gu_exam, 
+		const_exam, 
+		pysch_exam, 
+		medsDxCodes, 
+		ocProv,
+		med_dec_correct correct_coding		
+into #dxEnc1
+from #dxEnc 
+--where med_dec_correct != 'na'
+
+
+select [Candida-Vulvovaginitis], 
+		[Bacterial Vaginosis] ,
+		[Acute Cystitis with Hematuria,Dysuria,Urinary Frequency] ,
+		[Acute Cystitis wo Hematuria,Dysuria,Urinary Frequency] ,
+		[PID] ,
+		[Pelvic Pain] ,
+		[Abnormal Uterine Bleeding], 
+		correct_coding, count(distinct enc_id)
+from #dxEnc1
+group by [Candida-Vulvovaginitis], 
+		[Bacterial Vaginosis] ,
+		[Acute Cystitis with Hematuria,Dysuria,Urinary Frequency] ,
+		[Acute Cystitis wo Hematuria,Dysuria,Urinary Frequency] ,
+		[PID] ,
+		[Pelvic Pain] ,
+		[Abnormal Uterine Bleeding], 
+		correct_coding
+order by [Candida-Vulvovaginitis], 
+		[Bacterial Vaginosis] ,
+		[Acute Cystitis with Hematuria,Dysuria,Urinary Frequency] ,
+		[Acute Cystitis wo Hematuria,Dysuria,Urinary Frequency] ,
+		[PID] ,
+		[Pelvic Pain] ,
+		[Abnormal Uterine Bleeding], 
+		correct_coding
+
+select * from #dxEnc
